@@ -1,6 +1,6 @@
 id = "evm-trace"
 name = "EVM Trace"
-version = "0.1.0"
+version = "1.0.0"
 schema_version = 1
 authors = ["Sean"]
 description = "EVM & Foundry trace file support with hierarchical symbol outline, folding, and hover analysis"
