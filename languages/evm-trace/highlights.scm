@@ -1,17 +1,15 @@
 ; ==============================================================================
 ; Tree-sitter Highlights Query for EVM Execution Traces (evm_trace)
-; Production-grade syntax highlighting for Zed editor
+; Pixel-perfect alignment with XY-Zed Theme & trace-lsp Semantic Tokens
 ; ==============================================================================
 
-; --- Comments ---
+; --- Comments & Tree Guides (Forest Green / #6A9955) ---
 (comment) @comment
+(tree_guide) @comment
 
-; --- Tree Guides & Graph Structure ---
-(tree_guide) @punctuation.delimiter
-
-; --- Operators & Arrows ---
+; --- Operators & Arrows (Bright Yellow / Operator) ---
 "::" @operator
-"@" @punctuation.delimiter
+"@" @operator
 (creation_arrow) @operator
 (return_arrow) @operator
 (change_arrow) @operator
@@ -26,94 +24,105 @@
 ":" @punctuation.delimiter
 "," @punctuation.delimiter
 
-; --- Keywords & Control ---
+; --- Keywords & Control Flow (Purple / #c678dd) ---
 (keyword) @keyword
 (header_keyword) @keyword
 (call_type) @keyword
 (storage_keyword) @keyword
-(status_keyword) @type
+(status_keyword) @keyword
 (revert_keyword) @keyword
 (bytes_keyword) @keyword
 
-; --- Calls, Functions & Events ---
+; --- Contracts & Types (Cyan / Teal / #08e7c5) ---
 (call_expression
   target: (identifier) @type)
-
-(call_expression
-  target: (hex_literal) @constant.numeric)
-
-(call_expression
-  function: (identifier) @function.method)
-
-(call_expression
-  function: (hex_selector) @function.method)
 
 (emit_trace
   name: (identifier) @type)
 
-(custom_error
-  name: (identifier) @function.method)
+(labeled_address
+  label: (identifier) @type)
 
-; --- Contract Creation ---
 (creation_trace
   contract: (identifier) @type)
 
 (creation_trace
   contract: (template_value) @type)
 
-(creation_trace
-  address: (hex_literal) @constant.numeric)
+; --- Functions & Selectors (Yellow / Gold / #DCDCAA) ---
+(call_expression
+  function: (identifier) @function.method)
 
-; --- Gas & Estimations ---
-(gas
-  amount: (number) @constant.numeric)
+(call_expression
+  function: (hex_selector) @function.method)
 
-(estimate_value) @constant.numeric
+(custom_error
+  name: (identifier) @function.method)
 
-; --- Properties, Labels & Slots ---
-(named_argument
-  name: (identifier) @property)
+; --- Addresses & Storage Slots (Light Blue / #9cdcfe / #0550ae) ---
+(call_expression
+  target: (hex_literal) @property)
 
 (labeled_address
-  label: (identifier) @property
-  address: (hex_literal) @constant.numeric)
+  address: (hex_literal) @property)
+
+(creation_trace
+  address: (hex_literal) @property)
 
 (storage_change
   slot: (identifier) @property)
 
 (storage_change
-  slot: (number) @constant.numeric)
+  slot: (hex_literal) @property)
 
 (storage_change
-  slot: (hex_literal) @constant.numeric)
-
-(storage_change
-  before: (number) @constant.numeric)
-
-(storage_change
-  before: (hex_literal) @constant.numeric)
-
-(storage_change
-  after: (number) @constant.numeric)
-
-(storage_change
-  after: (hex_literal) @constant.numeric)
-
-(topic_entry
-  index: (number) @constant.numeric
-  value: (hex_literal) @constant.numeric)
+  slot: (number) @property)
 
 (data_entry
-  value: (hex_literal) @constant.numeric)
+  value: (hex_literal) @property)
 
-; --- Values & Literals ---
-(number) @constant.numeric
-(hex_literal) @constant.numeric
-(raw_hex) @constant.numeric
+; --- Parameters & Labels (Sky Blue / #7cc6f8 / #0a3069) ---
+(named_argument
+  name: (identifier) @variable)
+
+(topic_entry
+  index: (number) @variable
+  value: (hex_literal) @property)
+
+; --- Gas, Amounts, Wei & Numbers (Mint Green / #B4CDA8 / #1a7f37) ---
+(gas
+  amount: (number) @number)
+
+(estimate_value) @number
+
+(scientific_estimate
+  estimate: (estimate_value) @number)
+
+(number_with_estimate
+  value: (number) @number
+  estimate: (scientific_estimate) @number)
+
+(storage_change
+  before: (hex_literal) @number)
+
+(storage_change
+  before: (number) @number)
+
+(storage_change
+  after: (hex_literal) @number)
+
+(storage_change
+  after: (number) @number)
+
+(number) @number
+(boolean) @boolean
+
+; --- Strings & Revert Messages (Warm Orange / #CD9069) ---
 (string) @string
 (template_value) @string
-(boolean) @constant.numeric
 (revert_message) @string
 
-; Fallback identifiers
+; --- Fallback Identifiers & Hex ---
+(raw_hex) @property
+(hex_literal) @property
 (identifier) @variable
