@@ -74,6 +74,7 @@ pub struct TraceDocument {
     pub roots: Vec<TraceNode>,
     pub line_count: u32,
     pub addresses: BTreeMap<String, String>, // Address -> Known Name/Label
+    pub raw_text: String,
 }
 
 /// Calculate the indentation depth of a trace line and extract its payload.
@@ -263,6 +264,7 @@ fn parse_gas_prefix(s: &str) -> Option<u64> {
 impl TraceDocument {
     pub fn parse(content: &str) -> Self {
         let mut doc = TraceDocument::default();
+        doc.raw_text = content.to_string();
         let lines: Vec<&str> = content.lines().collect();
         doc.line_count = lines.len() as u32;
 

@@ -114,6 +114,7 @@ fn handle_rpc(req: RpcRequest, state: &Arc<Mutex<ServerState>>) -> Option<RpcRes
                 document_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                semantic_tokens_provider: Some(crate::tokens::server_capabilities()),
                 ..Default::default()
             };
 
@@ -214,6 +215,26 @@ fn handle_rpc(req: RpcRequest, state: &Arc<Mutex<ServerState>>) -> Option<RpcRes
                 jsonrpc: "2.0".to_string(),
                 id,
                 result: Some(serde_json::to_value(hover_res).unwrap()),
+                error: None,
+            })
+        }
+        "textDocument/semanticTokens/full" => {
+            let mut tokens_res = lsp_types::SemanticTokensResult::Tokens(lsp_types::SemanticTokens {
+                result_id: None,
+                data: Vec::new(),
+            });
+            if let Some(params_val) = req.params {
+                if let Ok(params) = serde_json::from_value::<lsp_types::SemanticTokensParams>(params_val) {
+                    let lock = state.lock().unwrap();
+                    if let Some(doc) = lock.documents.get(&params.text_document.uri) {
+                        tokens_res = lsp_types::SemanticTokensResult::Tokens(crate::tokens::tokenize_document(&doc.raw_text));
+                    }
+                }
+            }
+            Some(RpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: Some(serde_json::to_value(tokens_res).unwrap()),
                 error: None,
             })
         }
