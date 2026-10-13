@@ -131,7 +131,7 @@ Add the following to your Zed settings:
         "trace-lsp"
       ],
       "document_symbols": "on",
-      "semantic_tokens": "full"
+      "semantic_tokens": "combined"
     }
   },
   "file_types": {
@@ -153,6 +153,9 @@ Add the following to your Zed settings:
   }
 }
 ```
+
+> **Note on `semantic_tokens: "combined"`**:
+> Zed uses a two-tier syntax engine. Tree-sitter (`tree-sitter-evm-trace`) runs synchronously at 0ms to provide instant baseline highlighting and full syntax colors in modal preview buffers (`ctrl-alt-p` in Symbol Picker). `trace-lsp` then overlays semantic tokens on top for deep gas analytics, decoded parameters, and storage slots.
 
 ### 3. Install the Extension in Zed
 1. In Zed, open the command palette (`ctrl-shift-p` / `cmd-shift-p`).
