@@ -1,0 +1,14 @@
+id = "evm-trace"
+name = "EVM Trace"
+version = "0.1.0"
+schema_version = 1
+authors = ["Sean"]
+description = "EVM & Foundry trace file support with hierarchical symbol outline, folding, and hover analysis"
+repository = "https://github.com/sean/zed-trace"
+
+[language_servers.trace-lsp]
+name = "Trace Language Server"
+languages = ["EVM Trace"]
+
+[language_servers.trace-lsp.language_ids]
+"EVM Trace" = "evm-trace"

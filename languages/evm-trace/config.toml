@@ -1,0 +1,13 @@
+name = "EVM Trace"
+path_suffixes = ["trace", "traces", "sol.trace"]
+line_comments = ["// ", "# "]
+tab_size = 4
+hard_tabs = false
+word_characters = ["$", "_", "@"]
+
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["comment", "string"] },
+]
