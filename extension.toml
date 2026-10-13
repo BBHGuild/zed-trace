@@ -12,3 +12,8 @@ languages = ["EVM Trace"]
 
 [language_servers.trace-lsp.language_ids]
 "EVM Trace" = "evm-trace"
+
+[grammars.evm_trace]
+repository = "https://github.com/BBHGuild/tree-sitter-evm-trace"
+rev = "f4aaa733210c1888c8cd4e3fe1d6278eb6fda61f"
+
