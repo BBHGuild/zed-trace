@@ -31,7 +31,7 @@ fn truncate_val(val: &str) -> String {
     }
 }
 
-pub const MAX_SYMBOL_TREE_DEPTH: usize = 30;
+pub const MAX_SYMBOL_TREE_DEPTH: usize = 50;
 
 fn node_symbol_info(node: &TraceNode) -> Option<(String, Option<String>, SymbolKind)> {
     use crate::parser::ReturnStatus;

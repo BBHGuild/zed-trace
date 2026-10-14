@@ -58,8 +58,9 @@ $$\text{JSON Nesting Depth} = 2 \times D + 4 \quad (\text{or up to } 2D + 6)$$
 
 | Tree Depth | JSON Nesting Depth | Headroom to 128 | Result in Zed |
 | :---: | :---: | :---: | :--- |
-| **30** | **64** | **64 levels** | **Safe (our limit)** |
+| 30 | 64 | 64 levels | Safe |
 | 45 | 94 | 34 levels | Safe |
+| **50** | **104** | **24 levels** | **Safe (our limit)** |
 | 60 | 124 | 4 levels | Dangerously close |
 | **61** | **126** | **2 levels** | **Absolute mathematical limit** |
 | **$\ge 62$** | **$\ge 128$** | **0** | **CRASH (`recursion limit exceeded`)** |
@@ -79,20 +80,20 @@ Because the deserializer fails, Zed **drops the entire response and renders 0 sy
 
 In [`crates/trace-lsp/src/analysis.rs`](file:///home/sean/Github/zed-trace/crates/trace-lsp/src/analysis.rs), structural nesting is capped at:
 ```rust
-pub const MAX_SYMBOL_TREE_DEPTH: usize = 30;
+pub const MAX_SYMBOL_TREE_DEPTH: usize = 50;
 ```
 
 ### Algorithm
-1. **Natural Hierarchy ($\le 30$)**:
-   Calls and events at depths $0 \dots 29$ recurse normally with full parent-child hierarchy. Standard traces ($\le 30$ depth) are 100% unaffected.
-2. **Hoisting ($> 30$)**:
+1. **Natural Hierarchy ($\le 50$)**:
+   Calls and events at depths $0 \dots 49$ recurse normally with full parent-child hierarchy. Traces up to depth 50 are 100% unaffected.
+2. **Hoisting ($> 50$)**:
    When a node reaches `depth >= MAX_SYMBOL_TREE_DEPTH`, it collects **all** descendants across its entire subtree into its `children` list as flat leaf symbols (`children: None`).
 3. **Zed Well-Formed Outline Compliance**:
    Zed verifies outlines using `BufferOutlines::outlines_are_well_formed` in [`crates/outline_panel/src/outline_panel.rs:451`](file:///home/sean/Github/zed/crates/outline_panel/src/outline_panel.rs#L451):
    - **Sibling Non-Overlap**: When popping sibling ancestors, `sibling_1.range.end <= sibling_2.range.start` must hold.
      *Solution*: Every hoisted leaf symbol has its `range.end` set to its **own line** (`line: node.line_start, character: doc.line_len(node.line_start)`). Because line numbers in the trace are strictly monotonic, consecutive siblings never overlap ($L_1 < L_2$).
    - **Parent Enclosure**: For every child, `child.range.end <= parent.range.end`.
-     *Solution*: The depth-30 ancestor's `range.end` expands to encompass the maximum `range.end` of all its descendants.
+     *Solution*: The depth-50 ancestor's `range.end` expands to encompass the maximum `range.end` of all its descendants.
 
 ### Verification Matrix
 - **`Fox/tx-trace-V1.trace`**: 1,149 / 1,149 symbols retained (**100%**), max JSON depth 67, 0 well-formed violations.
