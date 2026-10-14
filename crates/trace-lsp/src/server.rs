@@ -166,19 +166,37 @@ fn handle_rpc(req: RpcRequest, state: &Arc<Mutex<ServerState>>) -> Option<RpcRes
             None
         }
         "textDocument/documentSymbol" => {
-            let mut symbols_res = DocumentSymbolResponse::Nested(Vec::new());
+            let started = std::time::Instant::now();
+            let mut symbols = Vec::new();
             if let Some(params_val) = req.params {
                 if let Ok(params) = serde_json::from_value::<lsp_types::DocumentSymbolParams>(params_val) {
-                    let lock = state.lock().unwrap();
-                    if let Some(doc) = lock.documents.get(&params.text_document.uri) {
-                        symbols_res = DocumentSymbolResponse::Nested(doc.to_document_symbols());
+                    let uri = params.text_document.uri;
+                    let mut lock = state.lock().unwrap();
+                    if !lock.documents.contains_key(&uri) {
+                        // Zed's outline modal silently refuses to open on an empty
+                        // response, so never return [] just because didOpen raced us.
+                        if let Some(text) = uri.to_file_path().ok().and_then(|p| std::fs::read_to_string(p).ok()) {
+                            eprintln!("trace-lsp: {uri} not open, parsed from disk");
+                            lock.documents.insert(uri.clone(), TraceDocument::parse(&text));
+                        }
+                    }
+                    if let Some(doc) = lock.documents.get(&uri) {
+                        symbols = doc.to_document_symbols();
                     }
                 }
             }
+            fn count(s: &[lsp_types::DocumentSymbol]) -> usize {
+                s.iter().map(|c| 1 + c.children.as_deref().map_or(0, count)).sum()
+            }
+            eprintln!(
+                "trace-lsp: documentSymbol -> {} symbols in {:.1?}",
+                count(&symbols),
+                started.elapsed()
+            );
             Some(RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id,
-                result: Some(serde_json::to_value(symbols_res).unwrap()),
+                result: Some(serde_json::to_value(DocumentSymbolResponse::Nested(symbols)).unwrap()),
                 error: None,
             })
         }

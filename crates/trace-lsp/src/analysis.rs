@@ -113,20 +113,12 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
                 SymbolKind::STRUCT,
             )
         }
-        TraceItemKind::Other { text } => {
-            if text.starts_with('@') {
-                let slot_part = text.split(':').next().unwrap_or(text).trim();
-                let diff_part = text.split(':').nth(1).unwrap_or("").trim();
-                (
-                    slot_part.to_string(),
-                    if diff_part.is_empty() { None } else { Some(diff_part.to_string()) },
-                    SymbolKind::PROPERTY,
-                )
-            } else {
-                return None;
-            }
-        }
-        TraceItemKind::Return { .. } => return None,
+        // Individual `@ slot: before → after` lines are intentionally NOT symbols.
+        // Zed converts and highlights every symbol on its UI thread, and slot diffs
+        // alone made up ~30% of the payload on large traces. They remain foldable,
+        // hoverable and syntax-highlighted; the parent `storage changes` symbol
+        // marks where they are.
+        TraceItemKind::Other { .. } | TraceItemKind::Return { .. } => return None,
     };
 
     // First recursively convert children so we know their exact extents
@@ -173,10 +165,19 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
         }
     }
 
+    // Start at the first payload character (after `│ ├─ └─` guides and spaces).
+    // Zed builds the visible label from range.start..selection_range.end, so this
+    // yields `[2534] Token::balanceOf` instead of `│   ├─ [2534] Token::balanceOf`.
+    let payload_col: u32 = line_text
+        .chars()
+        .take_while(|c| c.is_whitespace() || matches!(c, '│' | '├' | '└' | '─'))
+        .map(|c| c.len_utf16() as u32)
+        .sum::<u32>()
+        .min(sel_start);
     let range = Range {
         start: Position {
             line: node.line_start,
-            character: 0,
+            character: payload_col,
         },
         end: end_pos,
     };

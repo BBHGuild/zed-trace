@@ -136,10 +136,9 @@ fn test_deep_hierarchy_preservation() {
         .find(|c| c.name.contains("storage changes"))
         .expect("deposit should contain storage changes");
     assert_eq!(deposit_storage.kind, SymbolKind::STRUCT);
-    let storage_slots = deposit_storage.children.as_ref().expect("deposit storage should have slot diffs");
-    assert_eq!(storage_slots.len(), 1);
-    assert_eq!(storage_slots[0].kind, SymbolKind::PROPERTY);
-    assert!(storage_slots[0].name.starts_with("@ 0x1fb4de8f865d751e0e8d9986066405ce08df416aff5fdd6299ad70c234250abc"));
+    // Slot diffs are summarized in `detail`, not emitted as child symbols (perf).
+    assert!(deposit_storage.children.is_none());
+    assert_eq!(deposit_storage.detail.as_deref(), Some("1 slot"));
 
     // 6. swap_router -> PancakePair::swap
     let pair_swap = swap_router_children
@@ -167,8 +166,7 @@ fn test_deep_hierarchy_preservation() {
         .find(|c| c.name.contains("storage changes"))
         .expect("transfer should contain storage changes");
     assert_eq!(transfer_storage.kind, SymbolKind::STRUCT);
-    let transfer_slots = transfer_storage.children.as_ref().expect("transfer storage should have slots");
-    assert_eq!(transfer_slots.len(), 5, "transfer storage should have 5 slot diff children");
+    assert_eq!(transfer_storage.detail.as_deref(), Some("5 slots"), "transfer storage should report 5 slots");
 
     // 9. pair_swap -> emit Sync AND emit Swap
     assert!(
