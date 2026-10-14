@@ -31,7 +31,9 @@ fn truncate_val(val: &str) -> String {
     }
 }
 
-pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<DocumentSymbol> {
+pub const MAX_SYMBOL_TREE_DEPTH: usize = 30;
+
+fn node_symbol_info(node: &TraceNode) -> Option<(String, Option<String>, SymbolKind)> {
     use crate::parser::ReturnStatus;
 
     let (name, detail, kind) = match &node.kind {
@@ -121,16 +123,12 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
         TraceItemKind::Other { .. } | TraceItemKind::Return { .. } => return None,
     };
 
-    // First recursively convert children so we know their exact extents
-    let children: Vec<DocumentSymbol> = node
-        .children
-        .iter()
-        .filter_map(|c| node_to_document_symbol(c, doc))
-        .collect();
+    Some((name, detail, kind))
+}
 
-    // 1. Calculate selection_range: Find `name` on line `node.line_start`
+fn symbol_ranges(node: &TraceNode, doc: &TraceDocument, name: &str) -> (Range, u32) {
     let line_text = &node.raw_line;
-    let (sel_start, sel_end) = if let Some(byte_idx) = line_text.find(&name) {
+    let (sel_start, sel_end) = if let Some(byte_idx) = line_text.find(name) {
         let utf16_start = line_text[..byte_idx].encode_utf16().count() as u32;
         let utf16_end = utf16_start + name.encode_utf16().count() as u32;
         (utf16_start, utf16_end)
@@ -148,8 +146,77 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
         },
     };
 
-    // 2. Calculate range: Start at col 0 of line_start, end at col line_len of line_end,
-    //    and strictly encompass all children.
+    // Start at the first payload character (after `│ ├─ └─` guides and spaces).
+    // Zed builds the visible label from range.start..selection_range.end, so this
+    // yields `[2534] Token::balanceOf` instead of `│   ├─ [2534] Token::balanceOf`.
+    let payload_col: u32 = line_text
+        .chars()
+        .take_while(|c| c.is_whitespace() || matches!(c, '│' | '├' | '└' | '─'))
+        .map(|c| c.len_utf16() as u32)
+        .sum::<u32>()
+        .min(sel_start);
+
+    (selection_range, payload_col)
+}
+
+fn node_to_flat_leaf_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<DocumentSymbol> {
+    let (name, detail, kind) = node_symbol_info(node)?;
+    let (selection_range, payload_col) = symbol_ranges(node, doc, &name);
+    let line_end_col = doc.line_len(node.line_start);
+    let range = Range {
+        start: Position {
+            line: node.line_start,
+            character: payload_col,
+        },
+        end: Position {
+            line: node.line_start,
+            character: line_end_col,
+        },
+    };
+
+    #[allow(deprecated)]
+    Some(DocumentSymbol {
+        name,
+        detail,
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range,
+        children: None,
+    })
+}
+
+fn collect_flat_descendants(node: &TraceNode, doc: &TraceDocument, out: &mut Vec<DocumentSymbol>) {
+    for child in &node.children {
+        if let Some(sym) = node_to_flat_leaf_symbol(child, doc) {
+            out.push(sym);
+        }
+        collect_flat_descendants(child, doc, out);
+    }
+}
+
+pub fn node_to_document_symbol_at_depth(
+    node: &TraceNode,
+    doc: &TraceDocument,
+    depth: usize,
+) -> Option<DocumentSymbol> {
+    let (name, detail, kind) = node_symbol_info(node)?;
+    let (selection_range, payload_col) = symbol_ranges(node, doc, &name);
+
+    let children = if depth >= MAX_SYMBOL_TREE_DEPTH {
+        let mut flat = Vec::new();
+        collect_flat_descendants(node, doc, &mut flat);
+        flat
+    } else {
+        node.children
+            .iter()
+            .filter_map(|c| node_to_document_symbol_at_depth(c, doc, depth + 1))
+            .collect()
+    };
+
+    // Calculate range: Start at payload_col of line_start, end at col line_len of line_end,
+    // and strictly encompass all children.
     let last_line = node.line_end.min(doc.line_count.saturating_sub(1));
     let last_char = doc.line_len(last_line);
     let mut end_pos = Position {
@@ -165,15 +232,6 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
         }
     }
 
-    // Start at the first payload character (after `│ ├─ └─` guides and spaces).
-    // Zed builds the visible label from range.start..selection_range.end, so this
-    // yields `[2534] Token::balanceOf` instead of `│   ├─ [2534] Token::balanceOf`.
-    let payload_col: u32 = line_text
-        .chars()
-        .take_while(|c| c.is_whitespace() || matches!(c, '│' | '├' | '└' | '─'))
-        .map(|c| c.len_utf16() as u32)
-        .sum::<u32>()
-        .min(sel_start);
     let range = Range {
         start: Position {
             line: node.line_start,
@@ -193,6 +251,10 @@ pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<
         selection_range,
         children: if children.is_empty() { None } else { Some(children) },
     })
+}
+
+pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<DocumentSymbol> {
+    node_to_document_symbol_at_depth(node, doc, 0)
 }
 
 

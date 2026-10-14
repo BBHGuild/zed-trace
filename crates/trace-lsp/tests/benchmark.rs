@@ -181,6 +181,81 @@ fn test_deep_hierarchy_preservation() {
     println!("All deep hierarchy assertions passed successfully! Depth >= 8 fully preserved.");
 }
 
+#[test]
+fn test_fox_trace_depth_clamp_and_well_formed() {
+    let path = "/home/sean/Github/template/test/Fox/tx-trace-V1.trace";
+    if !std::path::Path::new(path).exists() {
+        println!("Skipping Fox trace test, file not found: {path}");
+        return;
+    }
+
+    let content = fs::read_to_string(path).unwrap();
+    let doc = TraceDocument::parse(&content);
+    let start_sym = Instant::now();
+    let symbols = doc.to_document_symbols();
+    let sym_time = start_sym.elapsed();
+    println!("Fox to_document_symbols: {:?}", sym_time);
+
+    // 1. Serialize and test with serde_json (must succeed without recursion limit exceeded)
+    let json_bytes = serde_json::to_vec(&symbols).expect("serialization failed");
+    let deserialized: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_slice(&json_bytes).expect("serde_json deserialization failed");
+
+    // 2. Count total symbols
+    fn count_all(syms: &[lsp_types::DocumentSymbol]) -> usize {
+        let mut n = syms.len();
+        for s in syms {
+            if let Some(children) = &s.children {
+                n += count_all(children);
+            }
+        }
+        n
+    }
+    let total = count_all(&deserialized);
+    println!("Fox trace total symbols: {}", total);
+    assert_eq!(total, 1149, "All 1149 symbols must be preserved");
+
+    // 3. Zed outline well_formed validation
+    struct Item {
+        depth: usize,
+        start: (u32, u32),
+        end: (u32, u32),
+    }
+    let mut flat = Vec::new();
+    fn flatten(syms: &[lsp_types::DocumentSymbol], d: usize, out: &mut Vec<Item>) {
+        for s in syms {
+            out.push(Item {
+                depth: d,
+                start: (s.range.start.line, s.range.start.character),
+                end: (s.range.end.line, s.range.end.character),
+            });
+            if let Some(ch) = &s.children {
+                flatten(ch, d + 1, out);
+            }
+        }
+    }
+    flatten(&deserialized, 0, &mut flat);
+    flat.sort_by_key(|it| it.start);
+
+    let mut ancestors: Vec<&Item> = Vec::new();
+    for it in &flat {
+        assert!(it.start <= it.end, "Invalid range: start > end");
+        while let Some(&parent) = ancestors.last() {
+            if parent.depth >= it.depth {
+                ancestors.pop();
+                assert!(parent.end <= it.start, "Sibling overlap: parent.end > it.start");
+            } else {
+                break;
+            }
+        }
+        if let Some(&parent) = ancestors.last() {
+            assert!(it.end <= parent.end, "Child exceeds parent: it.end > parent.end");
+        }
+        ancestors.push(it);
+    }
+    println!("Fox trace well_formed verified with 0 violations!");
+}
+
 
 
 
