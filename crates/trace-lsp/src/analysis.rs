@@ -31,7 +31,7 @@ fn truncate_val(val: &str) -> String {
     }
 }
 
-pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
+pub fn node_to_document_symbol(node: &TraceNode, doc: &TraceDocument) -> Option<DocumentSymbol> {
     use crate::parser::ReturnStatus;
 
     let (name, detail, kind) = match &node.kind {
@@ -43,8 +43,8 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
                 _ => String::new(),
             };
             (
-                format!("{target}::{function}() [{}]", format_gas(*gas)),
-                Some(format!("Root Call{ret}")),
+                format!("{target}::{function}"),
+                Some(format!("[{gas_str}]{ret}", gas_str = format_gas(*gas))),
                 SymbolKind::METHOD,
             )
         }
@@ -73,27 +73,26 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
                 Some(ReturnStatus::Revert(r)) => format!(" -> [Revert] {}", truncate_val(r)),
                 _ => String::new(),
             };
-            let short_target = truncate_addr(target);
             (
-                format!("{short_target}::{function} [{}{val_tag}]", format_gas(*gas)),
-                Some(format!("call{type_tag}{ret}")),
+                format!("{target}::{function}"),
+                Some(format!("[{gas_str}{val_tag}]{type_tag}{ret}", gas_str = format_gas(*gas))),
                 SymbolKind::FUNCTION,
             )
         }
         TraceItemKind::Create { gas, contract, address } => (
-            format!("new {}@{} [{}]", contract, truncate_addr(address), format_gas(*gas)),
-            Some("deploy".to_string()),
+            format!("new {contract}"),
+            Some(format!("@{address} [{}]", format_gas(*gas))),
             SymbolKind::CONSTRUCTOR,
         ),
-        TraceItemKind::Event { name, details } => {
+        TraceItemKind::Event { name: ev_name, details } => {
             let short_details = if details.len() > 40 {
                 format!("{}...", &details[..40])
             } else {
                 details.clone()
             };
             (
-                format!("emit {name}{short_details}"),
-                Some("event".to_string()),
+                format!("emit {ev_name}"),
+                Some(short_details),
                 SymbolKind::EVENT,
             )
         }
@@ -109,16 +108,18 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
                 "storage".to_string()
             };
             (
-                format!("storage changes ({count_tag})"),
-                Some("storage".to_string()),
+                "storage changes".to_string(),
+                Some(count_tag),
                 SymbolKind::STRUCT,
             )
         }
         TraceItemKind::Other { text } => {
             if text.starts_with('@') {
+                let slot_part = text.split(':').next().unwrap_or(text).trim();
+                let diff_part = text.split(':').nth(1).unwrap_or("").trim();
                 (
-                    text.clone(),
-                    Some("storage slot".to_string()),
+                    slot_part.to_string(),
+                    if diff_part.is_empty() { None } else { Some(diff_part.to_string()) },
                     SymbolKind::PROPERTY,
                 )
             } else {
@@ -128,33 +129,57 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
         TraceItemKind::Return { .. } => return None,
     };
 
+    // First recursively convert children so we know their exact extents
+    let children: Vec<DocumentSymbol> = node
+        .children
+        .iter()
+        .filter_map(|c| node_to_document_symbol(c, doc))
+        .collect();
+
+    // 1. Calculate selection_range: Find `name` on line `node.line_start`
+    let line_text = &node.raw_line;
+    let (sel_start, sel_end) = if let Some(byte_idx) = line_text.find(&name) {
+        let utf16_start = line_text[..byte_idx].encode_utf16().count() as u32;
+        let utf16_end = utf16_start + name.encode_utf16().count() as u32;
+        (utf16_start, utf16_end)
+    } else {
+        (0, doc.line_len(node.line_start))
+    };
+    let selection_range = Range {
+        start: Position {
+            line: node.line_start,
+            character: sel_start,
+        },
+        end: Position {
+            line: node.line_start,
+            character: sel_end,
+        },
+    };
+
+    // 2. Calculate range: Start at col 0 of line_start, end at col line_len of line_end,
+    //    and strictly encompass all children.
+    let last_line = node.line_end.min(doc.line_count.saturating_sub(1));
+    let last_char = doc.line_len(last_line);
+    let mut end_pos = Position {
+        line: last_line,
+        character: last_char,
+    };
+
+    for child in &children {
+        if child.range.end.line > end_pos.line
+            || (child.range.end.line == end_pos.line && child.range.end.character > end_pos.character)
+        {
+            end_pos = child.range.end;
+        }
+    }
+
     let range = Range {
         start: Position {
             line: node.line_start,
             character: 0,
         },
-        end: Position {
-            line: node.line_end,
-            character: node.raw_line.len() as u32,
-        },
+        end: end_pos,
     };
-
-    let selection_range = Range {
-        start: Position {
-            line: node.line_start,
-            character: 0,
-        },
-        end: Position {
-            line: node.line_start,
-            character: node.raw_line.len() as u32,
-        },
-    };
-
-    let children: Vec<DocumentSymbol> = node
-        .children
-        .iter()
-        .filter_map(node_to_document_symbol)
-        .collect();
 
     #[allow(deprecated)]
     Some(DocumentSymbol {
@@ -173,7 +198,7 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
 
 impl TraceDocument {
     pub fn to_document_symbols(&self) -> Vec<DocumentSymbol> {
-        self.roots.iter().filter_map(node_to_document_symbol).collect()
+        self.roots.iter().filter_map(|r| node_to_document_symbol(r, self)).collect()
     }
 
     pub fn to_folding_ranges(&self) -> Vec<FoldingRange> {

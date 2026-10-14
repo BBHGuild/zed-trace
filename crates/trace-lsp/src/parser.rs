@@ -73,8 +73,15 @@ pub struct TraceNode {
 pub struct TraceDocument {
     pub roots: Vec<TraceNode>,
     pub line_count: u32,
+    pub line_lengths: Vec<u32>,
     pub addresses: BTreeMap<String, String>, // Address -> Known Name/Label
     pub raw_text: String,
+}
+
+impl TraceDocument {
+    pub fn line_len(&self, line: u32) -> u32 {
+        self.line_lengths.get(line as usize).copied().unwrap_or(0)
+    }
 }
 
 /// Calculate the indentation depth of a trace line and extract its payload.
@@ -272,6 +279,7 @@ impl TraceDocument {
         doc.raw_text = content.to_string();
         let lines: Vec<&str> = content.lines().collect();
         doc.line_count = lines.len() as u32;
+        doc.line_lengths = lines.iter().map(|l| l.encode_utf16().count() as u32).collect();
 
         let mut node_counter = 0;
         // Stack of (depth, TraceNode)
@@ -289,7 +297,7 @@ impl TraceDocument {
             while let Some((last_depth, _)) = stack.last() {
                 if *last_depth >= depth {
                     let (_, mut closed_node) = stack.pop().unwrap();
-                    closed_node.line_end = line_num.saturating_sub(1);
+                    closed_node.line_end = closed_node.line_end.max(line_num.saturating_sub(1));
                     if let Some((_, parent)) = stack.last_mut() {
                         parent.children.push(closed_node);
                     } else {
@@ -304,6 +312,7 @@ impl TraceDocument {
             if let TraceItemKind::Return { ref status } = kind {
                 if let Some((_, parent)) = stack.last_mut() {
                     parent.return_status = Some(status.clone());
+                    parent.line_end = parent.line_end.max(line_num);
                 }
             }
 
@@ -341,7 +350,7 @@ impl TraceDocument {
 
         // Drain remainder of the stack
         while let Some((_, mut closed_node)) = stack.pop() {
-            closed_node.line_end = doc.line_count.saturating_sub(1);
+            closed_node.line_end = closed_node.line_end.max(doc.line_count.saturating_sub(1));
             if let Some((_, parent)) = stack.last_mut() {
                 parent.children.push(closed_node);
             } else {
