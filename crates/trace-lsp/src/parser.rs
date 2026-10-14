@@ -91,26 +91,28 @@ pub fn extract_depth_and_payload(line: &str) -> Option<(usize, &str)> {
         }
     }
 
-    // Look for branch markers '├─ ' or '└─ '
-    let marker = if line.contains("├─ ") {
-        Some("├─ ")
-    } else if line.contains("└─ ") {
-        Some("└─ ")
+    // Look for branch markers '├─ ' or '└─ ' or '├─' or '└─'
+    let marker = if let Some(idx) = line.find("├─") {
+        let m_len = if line[idx..].starts_with("├─ ") { "├─ ".len() } else { "├─".len() };
+        Some((idx, m_len))
+    } else if let Some(idx) = line.find("└─") {
+        let m_len = if line[idx..].starts_with("└─ ") { "└─ ".len() } else { "└─".len() };
+        Some((idx, m_len))
     } else {
         None
     };
 
-    if let Some(m) = marker {
-        if let Some(pos) = line.find(m) {
-            let prefix = &line[..pos];
-            let char_count = prefix.chars().count();
-            let depth = char_count / 4;
-            let payload = &line[pos + m.len()..];
-            return Some((depth, payload.trim()));
-        }
+    if let Some((pos, marker_len)) = marker {
+        let prefix = &line[..pos];
+        let num_bars = prefix.chars().filter(|&c| c == '│').count();
+        let space_depth = prefix.chars().count() / 4;
+        let depth = space_depth.max(num_bars + 1);
+        let payload = &line[pos + marker_len..];
+        return Some((depth, payload.trim()));
     }
 
     // Continuation line (e.g. storage changes '@ 0x...: ...' or event details)
+    let num_bars = line.chars().filter(|&c| c == '│').count();
     let mut leading_chars = 0;
     let mut byte_offset = 0;
     for (idx, ch) in line.char_indices() {
@@ -121,13 +123,19 @@ pub fn extract_depth_and_payload(line: &str) -> Option<(usize, &str)> {
             break;
         }
     }
-    let depth = leading_chars / 4;
     let payload = line[byte_offset..].trim();
     if !payload.is_empty() {
+        let depth = if num_bars > 0 {
+            num_bars
+        } else {
+            leading_chars / 4
+        };
         Some((depth, payload))
     } else {
         None
     }
+
+
 }
 
 pub fn parse_line_kind(payload: &str) -> TraceItemKind {
@@ -364,6 +372,8 @@ mod tests {
         assert_eq!(depth2, 2);
         assert!(payload2.starts_with("[2534]"));
     }
+
+
 
     #[test]
     fn test_parse_sample() {

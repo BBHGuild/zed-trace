@@ -49,6 +49,14 @@
 (creation_trace
   contract: (template_value) @type)
 
+(compile_entry
+  (identifier) @type)
+
+(status_entry
+  (string) @string)
+
+(log_line) @string
+
 ; --- Functions & Selectors (Yellow / Gold / #DCDCAA) ---
 (call_expression
   function: (identifier) @function.method)

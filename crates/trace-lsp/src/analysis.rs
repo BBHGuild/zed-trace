@@ -22,7 +22,42 @@ fn truncate_addr(addr: &str) -> String {
     }
 }
 
-pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
+fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Option<DocumentSymbol> {
+    // 1. Exclude non-symbols completely
+    match &node.kind {
+        TraceItemKind::StorageChanges { .. }
+        | TraceItemKind::Return { .. }
+        | TraceItemKind::Other { .. } => return None,
+        _ => {}
+    }
+
+    // 2. Smart filtering of high-frequency micro-nodes at deep nesting
+    match &node.kind {
+        TraceItemKind::Call { gas, call_type, .. } => {
+            // At depth > 5, skip low-gas staticcalls (e.g. read-only balanceOf, token0)
+            if current_depth > 5 && *call_type == CallType::StaticCall && *gas < 20_000 {
+                return None;
+            }
+            // At depth > 7, only keep major calls
+            if current_depth > 7 && *gas < 50_000 {
+                return None;
+            }
+        }
+        TraceItemKind::Event { name, .. } => {
+            // Keep all events at depth <= 4
+            // At depth > 4, only keep key events (FlashLoan, Swap, Deposit, Withdrawal, Approval)
+            if current_depth > 4
+                && !matches!(
+                    name.as_str(),
+                    "FlashLoan" | "Swap" | "Deposit" | "Withdrawal" | "Approval"
+                )
+            {
+                return None;
+            }
+        }
+        _ => {}
+    }
+
     let (name, detail, kind) = match &node.kind {
         TraceItemKind::RootCall { gas, target, function } => (
             format!("{target}::{function}() [{}]", format_gas(*gas)),
@@ -72,26 +107,7 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
                 SymbolKind::EVENT,
             )
         }
-        TraceItemKind::StorageChanges { .. } => (
-            "storage changes".to_string(),
-            Some("storage".to_string()),
-            SymbolKind::STRUCT,
-        ),
-        TraceItemKind::Return { .. } => {
-            // Usually attached to parent, but if standalone:
-            return None;
-        }
-        TraceItemKind::Other { text } => {
-            if text.starts_with('@') {
-                (
-                    text.clone(),
-                    Some("storage slot".to_string()),
-                    SymbolKind::PROPERTY,
-                )
-            } else {
-                (text.clone(), None, SymbolKind::STRING)
-            }
-        }
+        _ => return None,
     };
 
     let range = Range {
@@ -119,7 +135,7 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
     let children: Vec<DocumentSymbol> = node
         .children
         .iter()
-        .filter_map(node_to_document_symbol)
+        .filter_map(|c| node_to_document_symbol_depth(c, current_depth + 1))
         .collect();
 
     #[allow(deprecated)]
@@ -134,6 +150,11 @@ pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
         children: if children.is_empty() { None } else { Some(children) },
     })
 }
+
+pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
+    node_to_document_symbol_depth(node, 0)
+}
+
 
 impl TraceDocument {
     pub fn to_document_symbols(&self) -> Vec<DocumentSymbol> {
