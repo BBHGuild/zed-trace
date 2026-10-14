@@ -1,56 +1,188 @@
 use std::fs;
 use std::time::Instant;
 use trace_lsp::parser::TraceDocument;
+use lsp_types::SymbolKind;
 
 #[test]
-fn test_benchmark_v5() {
-    let path = "/home/sean/Github/template/test/CCC/test/tx-trace-test.trace";
+fn test_benchmark_all_traces() {
+    let trace_files = [
+        "/home/sean/Github/template/test/CCC/tx-trace-V5.trace",
+        "/home/sean/Github/template/test/CCC/tx-trace-V1.trace",
+        "/home/sean/Github/template/test/CCC/test/tx-trace-test.trace",
+    ];
+
+    for path in trace_files {
+        if !std::path::Path::new(path).exists() {
+            println!("Skipping non-existent: {path}");
+            continue;
+        }
+
+        let content = fs::read_to_string(path).unwrap();
+        let num_lines = content.lines().count();
+        println!("\n=== Benchmarking: {path} ({} lines, {} bytes) ===", num_lines, content.len());
+
+        let start_parse = Instant::now();
+        let doc = TraceDocument::parse(&content);
+        let parse_time = start_parse.elapsed();
+        println!("TraceDocument::parse: {:?}", parse_time);
+        assert!(parse_time.as_millis() < 100, "Parse time exceeded 100ms: {:?}", parse_time);
+        assert!(!doc.roots.is_empty(), "TraceDocument must have roots");
+
+        let start_sym = Instant::now();
+        let symbols = doc.to_document_symbols();
+        let sym_time = start_sym.elapsed();
+        println!("to_document_symbols: {:?}, root symbols: {}", sym_time, symbols.len());
+        assert!(sym_time.as_millis() < 25, "to_document_symbols exceeded 25ms: {:?}", sym_time);
+
+        fn count_symbols(syms: &[lsp_types::DocumentSymbol]) -> (usize, usize, usize, usize) {
+            let (mut fns, mut evs, mut structs, mut props) = (0, 0, 0, 0);
+            for s in syms {
+                match s.kind {
+                    SymbolKind::FUNCTION | SymbolKind::METHOD => fns += 1,
+                    SymbolKind::EVENT => evs += 1,
+                    SymbolKind::STRUCT => structs += 1,
+                    SymbolKind::PROPERTY => props += 1,
+                    _ => {}
+                }
+                if let Some(children) = &s.children {
+                    let (f, e, st, p) = count_symbols(children);
+                    fns += f;
+                    evs += e;
+                    structs += st;
+                    props += p;
+                }
+            }
+            (fns, evs, structs, props)
+        }
+
+        let (fns, evs, structs, props) = count_symbols(&symbols);
+        let total = fns + evs + structs + props;
+        println!(
+            "Symbol Counts -> Functions: {}, Events: {}, Storage Structs: {}, Storage Props: {}, Total: {}",
+            fns, evs, structs, props, total
+        );
+
+        assert!(fns > 1000, "Expected >1000 function symbols, got {}", fns);
+        assert!(evs > 100, "Expected >100 event symbols, got {}", evs);
+    }
+}
+
+#[test]
+fn test_deep_hierarchy_preservation() {
+    let path = "/home/sean/Github/template/test/CCC/tx-trace-V5.trace";
     if !std::path::Path::new(path).exists() {
-        println!("File not found, skipping");
+        println!("Skipping deep hierarchy test, file not found: {path}");
         return;
     }
 
     let content = fs::read_to_string(path).unwrap();
-    println!("File size: {} bytes, {} lines", content.len(), content.lines().count());
-
-    let start = Instant::now();
     let doc = TraceDocument::parse(&content);
-    let parse_time = start.elapsed();
-    println!("TraceDocument::parse took: {:?}", parse_time);
-    println!("Roots count: {}", doc.roots.len());
-
-    let start_sym = Instant::now();
     let symbols = doc.to_document_symbols();
-    let sym_time = start_sym.elapsed();
-    println!("to_document_symbols took: {:?}", sym_time);
 
-    use std::collections::HashMap;
-    fn count_symbols_by_kind(symbols: &[lsp_types::DocumentSymbol], counts: &mut HashMap<String, usize>) {
-        for s in symbols {
-            *counts.entry(format!("{:?}", s.kind)).or_insert(0) += 1;
+    // Helper to recursively find a symbol by substring in its name
+    fn find_symbol<'a>(syms: &'a [lsp_types::DocumentSymbol], needle: &str) -> Option<&'a lsp_types::DocumentSymbol> {
+        for s in syms {
+            if s.name.contains(needle) {
+                return Some(s);
+            }
             if let Some(children) = &s.children {
-                count_symbols_by_kind(children, counts);
+                if let Some(found) = find_symbol(children, needle) {
+                    return Some(found);
+                }
             }
         }
+        None
     }
 
-    let mut counts = HashMap::new();
-    count_symbols_by_kind(&symbols, &mut counts);
-    let mut total_symbols = 0;
-    for (k, v) in counts {
-        println!("Kind {}: {}", k, v);
-        total_symbols += v;
-    }
+    // 1. Find line 63: TransparentUpgradeableProxy::fallback
+    let fallback = find_symbol(&symbols, "TransparentUpgradeableProxy::fallback")
+        .expect("Should find TransparentUpgradeableProxy::fallback");
+    let fallback_children = fallback.children.as_ref().expect("fallback should have children");
 
-    let json = serde_json::to_string(&symbols).unwrap();
-    println!("Total DocumentSymbols: {}", total_symbols);
-    println!("DocumentSymbols JSON size: {} bytes", json.len());
+    // 2. Fallback -> buy
+    let buy = fallback_children
+        .iter()
+        .find(|c| c.name.contains("buy"))
+        .expect("fallback should contain buy");
+    let buy_children = buy.children.as_ref().expect("buy should have children");
 
-    let start_tokens = Instant::now();
-    let tokens = trace_lsp::tokens::tokenize_document(&content);
-    let token_time = start_tokens.elapsed();
-    println!("tokenize_document took: {:?}", token_time);
-    println!("Total semantic tokens: {}", tokens.data.len());
+    // 3. buy -> balanceOf and swapExactETHForTokensSupportingFeeOnTransferTokens
+    assert!(
+        buy_children.iter().any(|c| c.name.contains("balanceOf")),
+        "buy should contain balanceOf child"
+    );
+    let swap_router = buy_children
+        .iter()
+        .find(|c| c.name.contains("swapExactETHForTokensSupportingFeeOnTransferTokens"))
+        .expect("buy should contain swapExactETH router call");
+    let swap_router_children = swap_router.children.as_ref().expect("swap router should have children");
+
+    // 4. swap_router -> deposit
+    let deposit = swap_router_children
+        .iter()
+        .find(|c| c.name.contains("deposit"))
+        .expect("swap router should contain deposit");
+    let deposit_children = deposit.children.as_ref().expect("deposit should have children");
+
+    // 5. deposit -> emit Deposit AND storage changes (1 slot)
+    let emit_deposit = deposit_children
+        .iter()
+        .find(|c| c.name.contains("emit Deposit"))
+        .expect("deposit should contain emit Deposit");
+    assert_eq!(emit_deposit.kind, SymbolKind::EVENT);
+
+    let deposit_storage = deposit_children
+        .iter()
+        .find(|c| c.name.contains("storage changes"))
+        .expect("deposit should contain storage changes");
+    assert_eq!(deposit_storage.kind, SymbolKind::STRUCT);
+    let storage_slots = deposit_storage.children.as_ref().expect("deposit storage should have slot diffs");
+    assert_eq!(storage_slots.len(), 1);
+    assert_eq!(storage_slots[0].kind, SymbolKind::PROPERTY);
+    assert!(storage_slots[0].name.starts_with("@ 0x1fb4de8f865d751e0e8d9986066405ce08df416aff5fdd6299ad70c234250abc"));
+
+    // 6. swap_router -> PancakePair::swap
+    let pair_swap = swap_router_children
+        .iter()
+        .find(|c| c.name.contains("PancakePair::swap"))
+        .expect("swap router should contain PancakePair::swap");
+    let pair_swap_children = pair_swap.children.as_ref().expect("pair swap should have children");
+
+    // 7. pair_swap -> transfer
+    let transfer = pair_swap_children
+        .iter()
+        .find(|c| c.name.contains("transfer"))
+        .expect("pair swap should contain transfer");
+    let transfer_children = transfer.children.as_ref().expect("transfer should have children");
+
+    // 8. transfer -> emit Transfer AND storage changes (5 slots)
+    let transfer_events: Vec<_> = transfer_children
+        .iter()
+        .filter(|c| c.name.contains("emit Transfer"))
+        .collect();
+    assert!(!transfer_events.is_empty(), "transfer should contain emit Transfer events");
+
+    let transfer_storage = transfer_children
+        .iter()
+        .find(|c| c.name.contains("storage changes"))
+        .expect("transfer should contain storage changes");
+    assert_eq!(transfer_storage.kind, SymbolKind::STRUCT);
+    let transfer_slots = transfer_storage.children.as_ref().expect("transfer storage should have slots");
+    assert_eq!(transfer_slots.len(), 5, "transfer storage should have 5 slot diff children");
+
+    // 9. pair_swap -> emit Sync AND emit Swap
+    assert!(
+        pair_swap_children.iter().any(|c| c.name.contains("emit Sync")),
+        "pair swap should contain emit Sync"
+    );
+    assert!(
+        pair_swap_children.iter().any(|c| c.name.contains("emit Swap")),
+        "pair swap should contain emit Swap"
+    );
+
+    println!("All deep hierarchy assertions passed successfully! Depth >= 8 fully preserved.");
 }
+
+
 
 

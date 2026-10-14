@@ -125,15 +125,12 @@ pub fn extract_depth_and_payload(line: &str) -> Option<(usize, &str)> {
     }
     let payload = line[byte_offset..].trim();
     if !payload.is_empty() {
-        let depth = if num_bars > 0 {
-            num_bars
-        } else {
-            leading_chars / 4
-        };
+        let depth = (leading_chars / 4).max(num_bars);
         Some((depth, payload))
     } else {
         None
     }
+
 
 
 }

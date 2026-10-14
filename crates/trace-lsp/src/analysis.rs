@@ -22,48 +22,32 @@ fn truncate_addr(addr: &str) -> String {
     }
 }
 
-fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Option<DocumentSymbol> {
-    // 1. Exclude non-symbols completely
-    match &node.kind {
-        TraceItemKind::StorageChanges { .. }
-        | TraceItemKind::Return { .. }
-        | TraceItemKind::Other { .. } => return None,
-        _ => {}
+fn truncate_val(val: &str) -> String {
+    let trimmed = val.trim();
+    if trimmed.len() > 24 {
+        format!("{}...", &trimmed[..24])
+    } else {
+        trimmed.to_string()
     }
+}
 
-    // 2. Smart filtering of high-frequency micro-nodes at deep nesting
-    match &node.kind {
-        TraceItemKind::Call { gas, call_type, .. } => {
-            // At depth > 5, skip low-gas staticcalls (e.g. read-only balanceOf, token0)
-            if current_depth > 5 && *call_type == CallType::StaticCall && *gas < 20_000 {
-                return None;
-            }
-            // At depth > 7, only keep major calls
-            if current_depth > 7 && *gas < 50_000 {
-                return None;
-            }
-        }
-        TraceItemKind::Event { name, .. } => {
-            // Keep all events at depth <= 4
-            // At depth > 4, only keep key events (FlashLoan, Swap, Deposit, Withdrawal, Approval)
-            if current_depth > 4
-                && !matches!(
-                    name.as_str(),
-                    "FlashLoan" | "Swap" | "Deposit" | "Withdrawal" | "Approval"
-                )
-            {
-                return None;
-            }
-        }
-        _ => {}
-    }
+pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
+    use crate::parser::ReturnStatus;
 
     let (name, detail, kind) = match &node.kind {
-        TraceItemKind::RootCall { gas, target, function } => (
-            format!("{target}::{function}() [{}]", format_gas(*gas)),
-            Some("Root Call".to_string()),
-            SymbolKind::METHOD,
-        ),
+        TraceItemKind::RootCall { gas, target, function } => {
+            let ret = match &node.return_status {
+                Some(ReturnStatus::Success(v)) if !v.is_empty() => format!(" -> [Return] {}", truncate_val(v)),
+                Some(ReturnStatus::Stop) => " -> [Stop]".to_string(),
+                Some(ReturnStatus::Revert(r)) => format!(" -> [Revert] {}", truncate_val(r)),
+                _ => String::new(),
+            };
+            (
+                format!("{target}::{function}() [{}]", format_gas(*gas)),
+                Some(format!("Root Call{ret}")),
+                SymbolKind::METHOD,
+            )
+        }
         TraceItemKind::Call {
             gas,
             target,
@@ -83,10 +67,16 @@ fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Opti
             } else {
                 String::new()
             };
+            let ret = match &node.return_status {
+                Some(ReturnStatus::Success(v)) if !v.is_empty() => format!(" -> [Return] {}", truncate_val(v)),
+                Some(ReturnStatus::Stop) => " -> [Stop]".to_string(),
+                Some(ReturnStatus::Revert(r)) => format!(" -> [Revert] {}", truncate_val(r)),
+                _ => String::new(),
+            };
             let short_target = truncate_addr(target);
             (
                 format!("{short_target}::{function} [{}{val_tag}]", format_gas(*gas)),
-                Some(format!("call{type_tag}")),
+                Some(format!("call{type_tag}{ret}")),
                 SymbolKind::FUNCTION,
             )
         }
@@ -96,8 +86,8 @@ fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Opti
             SymbolKind::CONSTRUCTOR,
         ),
         TraceItemKind::Event { name, details } => {
-            let short_details = if details.len() > 30 {
-                format!("{}...", &details[..30])
+            let short_details = if details.len() > 40 {
+                format!("{}...", &details[..40])
             } else {
                 details.clone()
             };
@@ -107,7 +97,35 @@ fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Opti
                 SymbolKind::EVENT,
             )
         }
-        _ => return None,
+        TraceItemKind::StorageChanges { .. } => {
+            let slot_count = node
+                .children
+                .iter()
+                .filter(|c| matches!(c.kind, TraceItemKind::Other { ref text } if text.starts_with('@')))
+                .count();
+            let count_tag = if slot_count > 0 {
+                format!("{slot_count} slot{}", if slot_count == 1 { "" } else { "s" })
+            } else {
+                "storage".to_string()
+            };
+            (
+                format!("storage changes ({count_tag})"),
+                Some("storage".to_string()),
+                SymbolKind::STRUCT,
+            )
+        }
+        TraceItemKind::Other { text } => {
+            if text.starts_with('@') {
+                (
+                    text.clone(),
+                    Some("storage slot".to_string()),
+                    SymbolKind::PROPERTY,
+                )
+            } else {
+                return None;
+            }
+        }
+        TraceItemKind::Return { .. } => return None,
     };
 
     let range = Range {
@@ -135,7 +153,7 @@ fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Opti
     let children: Vec<DocumentSymbol> = node
         .children
         .iter()
-        .filter_map(|c| node_to_document_symbol_depth(c, current_depth + 1))
+        .filter_map(node_to_document_symbol)
         .collect();
 
     #[allow(deprecated)]
@@ -151,9 +169,6 @@ fn node_to_document_symbol_depth(node: &TraceNode, current_depth: usize) -> Opti
     })
 }
 
-pub fn node_to_document_symbol(node: &TraceNode) -> Option<DocumentSymbol> {
-    node_to_document_symbol_depth(node, 0)
-}
 
 
 impl TraceDocument {
